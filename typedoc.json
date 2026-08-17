@@ -1,0 +1,12 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "entryPoints": [
+    "./pkg/src/wasm.ts"
+  ],
+  "out": "./docs",
+  "name": "crypto-toothpick",
+  "readme": "./README.md",
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "skipErrorChecking": true
+}

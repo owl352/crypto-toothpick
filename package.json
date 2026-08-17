@@ -1,0 +1,72 @@
+{
+  "name": "crypto-toothpick",
+  "version": "0.1.0",
+  "main": "dist/src/wasm.js",
+  "types": "dist/src/wasm.d.ts",
+  "react-native": "./dist/src/react-native.js",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dashpay/rs-x11-hash.git"
+  },
+  "scripts": {
+    "build:bin": "node build.cjs",
+    "build:ts": "tsc && cp -R pkg/**/*.*.node dist/binaries/ && cp -R pkg/binaries/native dist/binaries/",
+    "build:full": "npm run build:bin && npm run build:ts",
+    "ferric:build": "ferric build",
+    "test": "jest",
+    "docs": "typedoc",
+    "lint:rust": "cargo fmt",
+    "lint:src": "ts-standard --fix --project tsconfig.eslint.json ./pkg/src",
+    "lint:tests": "ts-standard --fix --project tsconfig.eslint.json ./tests",
+    "lint": "npm run lint:rust && npm run lint:src && npm run lint:tests",
+    "prepack": "npm pkg delete devDependencies"
+  },
+  "files": [
+    "dist/",
+    "tests/"
+  ],
+  "exports": {
+    ".": {
+      "browser": "./dist/src/wasm.js",
+      "node": "./dist/src/native.js",
+      "react-native": "./dist/src/react-native.js",
+      "default": "./dist/src/wasm.js"
+    },
+    "./wasm": "./dist/src/wasm.js",
+    "./native": "./dist/src/native.js"
+  },
+  "author": "owl352",
+  "license": "ISC",
+  "description": "Dash hashing primitives for JavaScript — X11 and SipHash-2-4 — as Node-API native binaries with a WebAssembly fallback",
+  "keywords": [
+    "x11",
+    "hash",
+    "dash",
+    "napi",
+    "webassembly"
+  ],
+  "devDependencies": {
+    "@babel/core": "^7.28.5",
+    "@babel/preset-env": "^7.28.5",
+    "@babel/preset-typescript": "^7.28.5",
+    "@types/jest": "^30.0.0",
+    "@types/node": "^24.0.13",
+    "babel-jest": "^30.2.0",
+    "emnapi": "^1.11.3",
+    "ferric-cli": "0.3.9",
+    "jest": "^30.2.0",
+    "toml": "^3.0.0",
+    "ts-morph": "^26.0.0",
+    "ts-standard": "^12.0.2",
+    "typedoc": "^0.28.7",
+    "typescript": "^5.8.3",
+    "wasm-opt": "^1.4.0"
+  },
+  "dependencies": {
+    "@emnapi/core": "1.9.0",
+    "@emnapi/runtime": "1.9.0",
+    "@tybys/wasm-util": "^0.10.1",
+    "fflate": "^0.8.2"
+  }
+}

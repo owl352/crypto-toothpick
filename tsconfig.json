@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "outDir": "./dist",
+    "noImplicitAny": true,
+    "module": "NodeNext",
+    "target": "ESNext",
+    "rootDir": "./pkg",
+    "allowJs": true,
+    "preserveConstEnums": true,
+    "strictNullChecks": true,
+    "moduleResolution": "NodeNext",
+    "esModuleInterop": true,
+    "declaration": true,
+    "lib": [
+      "es2015",
+      "dom"
+    ],
+    "paths": {
+      "crypto-toothpick": ["./"]
+    }
+  },
+  "include": [
+    "./pkg/**/*"
+  ],
+  "exclude": [
+    "node_modules",
+    "templates"
+  ]
+}

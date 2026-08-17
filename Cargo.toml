@@ -1,0 +1,36 @@
+[package]
+name = "crypto-toothpick"
+authors = ["owl352 <kokosinca123@gmail.com>"]
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+# 0.1.9 is tagged but not published to crates.io; it carries the `wasm-sysroot`
+# shims the C sources need to compile for wasm32 without a WASI sysroot.
+rs-x11-hash = { git = "https://github.com/dashpay/rs-x11-hash", tag = "0.1.9" }
+# Pinned as a pair: napi-derive 3.6 emits `bindgen_prelude::NativeBorrowBarrier`,
+# which napi does not expose on the wasm target, so a split resolve breaks the
+# wasm build only.
+napi = { version = "=3.9.1", features = ["napi3"], default-features = false }
+napi-derive = "=3.5.6"
+hex = "0.4.3"
+# Pure-Rust SipHash-2-4; no build script, so it cross-compiles and targets wasm
+# without any of the C toolchain rs-x11-hash needs.
+siphasher = "1.0.1"
+
+[build-dependencies]
+# Pinned: 2.4.x links the wasm build against emnapi v2's
+# `libemnapi-basic-napi-rs.a`, which only exists in emnapi 2.0.0-alpha.
+napi-build = "=2.3.2"
+
+[profile.release]
+lto = "fat"
+opt-level = 3
+strip = "symbols"
+codegen-units = 1
+panic = "abort"
+incremental = false
+debug = false

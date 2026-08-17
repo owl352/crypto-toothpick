@@ -1,0 +1,12 @@
+/target
+.pnp.*
+/.yarn
+/.idea
+/docs
+pkg/binaries
+pkg/utils
+/dist/*
+package-lock.json
+yarn.lock
+node_modules
+.DS_Store
