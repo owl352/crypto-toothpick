@@ -20,7 +20,8 @@
     "lint:src": "ts-standard --fix --project tsconfig.eslint.json ./pkg/src",
     "lint:tests": "ts-standard --fix --project tsconfig.eslint.json ./tests",
     "lint": "npm run lint:rust && npm run lint:src && npm run lint:tests",
-    "prepack": "npm pkg delete devDependencies"
+    "prepack": "npm pkg delete devDependencies",
+    "typecheck": "tsc --noEmit -p tsconfig.eslint.json"
   },
   "files": [
     "dist/",
@@ -38,7 +39,7 @@
   },
   "author": "owl352",
   "license": "ISC",
-  "description": "Dash hashing primitives for JavaScript — X11 and SipHash-2-4 — as Node-API native binaries with a WebAssembly fallback",
+  "description": "Dash hashing primitives for JavaScript \u2014 X11 and SipHash-2-4 \u2014 as Node-API native binaries with a WebAssembly fallback",
   "keywords": [
     "x11",
     "hash",

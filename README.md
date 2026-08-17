@@ -3,7 +3,8 @@
 JavaScript bindings for the hashes [Dash](https://dash.org) runs on: the
 [X11 chain](https://docs.dash.org/en/latest/introduction/features.html#x11-hash-algorithm)
 used for block headers, built on [rs-x11-hash](https://github.com/dashpay/rs-x11-hash),
-and SipHash-2-4 for BIP 158 compact filters.
+and SipHash-2-4 for BIP 158 compact filters — plus the filter matching itself,
+which is what a light wallet actually spends its sync in.
 
 The package ships prebuilt Node-API binaries for eight targets and a WebAssembly
 build that covers everything else — browsers, and any platform without a native
@@ -57,6 +58,7 @@ siphash24WithKeys(0x0706050403020100n, 0x0f0e0d0c0b0a0908n, new Uint8Array([0, 1
 | `siphash24` | `(key: Uint8Array \| string, data: Uint8Array \| string) => Uint8Array` | 8-byte digest, the 64-bit result little-endian |
 | `siphash24Hex` | `(key: Uint8Array \| string, data: Uint8Array \| string) => string` | same digest, 16 hex chars |
 | `siphash24WithKeys` | `(k0: bigint, k1: bigint, data: Uint8Array \| string) => bigint` | keyed by the two 64-bit halves |
+| `siphash24Many` | `(k0: bigint, k1: bigint, items: (Uint8Array \| string)[]) => BigUint64Array` | one call for many messages — see below |
 | `X11_INPUT_LENGTH` | `80` | bytes of input X11 consumes |
 | `X11_OUTPUT_LENGTH` | `32` | bytes of X11 digest |
 | `SIPHASH24_KEY_LENGTH` | `16` | bytes of SipHash key: `k0` little-endian, then `k1` |
@@ -66,6 +68,25 @@ siphash24WithKeys(0x0706050403020100n, 0x0f0e0d0c0b0a0908n, new Uint8Array([0, 1
 Unlike X11, SipHash takes data of any length; only its key is fixed, at 16
 bytes. `siphash24WithKeys` drops straight into a
 `(k0, k1, data) => bigint` hook such as `dash-core-p2p`'s `setCustomSipHash`.
+
+### Batch the small ones
+
+Crossing the Node-API boundary costs about 200ns of call setup, and hashing a
+25-byte BIP 158 filter item is only ~30ns of that. Called once per item, this
+binding is **no faster than a well-written 32-bit JS SipHash** — the boundary is
+the whole cost. Measured on an M-series mac, per item, 25-byte items:
+
+| | per item | vs JS |
+| --- | --- | --- |
+| JS, BigInt-based (e.g. `dash-core-p2p`) | ~2900 ns | — |
+| JS, 32-bit halves | ~270-540 ns | 1.0x |
+| `siphash24WithKeys`, one call per item | ~262 ns | ~1-2x |
+| `siphash24Many`, one call for 1000 items | **~76 ns** | **~7x** |
+
+So hash filter items in one `siphash24Many` call rather than in a loop. Per-call
+is fine once the message is big enough to dwarf the setup: at 1KB the binding is
+~14x a 32-bit JS implementation, and X11 (6.2µs per header) never notices the
+boundary at all.
 
 ### The input is always 80 bytes
 
@@ -85,6 +106,62 @@ different algorithm.
 The digest is returned in internal byte order, the order the algorithm produces.
 Block explorers show block hashes reversed, so reverse the bytes yourself if you
 are comparing against one.
+
+___
+## Compact filter matching (BIP 158)
+
+Wallet sync asks one question per block: *does this block's filter touch
+anything I watch?* Answering it in JS means decoding a Golomb-Rice set and
+running SipHash over every watched item in BigInt arithmetic. `gcsMatchAny`
+does the whole thing in Rust and returns a boolean:
+
+```js
+import { gcsMatchAny } from 'crypto-toothpick'
+
+// blockHash is the 32 bytes in internal (wire) order, not the reversed
+// form block explorers show
+if (gcsMatchAny(cfilterPayload, blockHash, watchedScripts)) {
+  await downloadBlock(blockHash)
+}
+```
+
+Syncing a range of blocks against a set that does not change? Build a
+`FilterMatcher` once and the watched items stop crossing the boundary per
+block:
+
+```js
+import { FilterMatcher } from 'crypto-toothpick'
+
+const matcher = new FilterMatcher(watchedScripts)
+
+for (const { filter, blockHash } of filters) {
+  if (matcher.matchBlock(filter, blockHash)) await downloadBlock(blockHash)
+}
+```
+
+Both take Golomb-Rice parameters as an optional `{ p, m }`, defaulting to the
+basic filter's `BASIC_FILTER_P` (19) and `BASIC_FILTER_M` (784931n).
+
+### What it costs
+
+Per block, on an M-series mac, against the same work done in JS with a
+BigInt SipHash — N is the filter's item count, K the wallet's watched items:
+
+| | N=500, K=50 | N=2500, K=200 | N=2500, K=1000 | N=8000, K=200 |
+| --- | --- | --- | --- | --- |
+| JS: decode + match | 553 µs | 815 µs | 3385 µs | 1246 µs |
+| `gcsMatchAny` | 5.8 µs | 23.5 µs | 244 µs | 41.5 µs |
+| `FilterMatcher` | **2.5 µs** | **11.0 µs** | **27.9 µs** | **29.1 µs** |
+| speedup | 218x | 74x | 121x | 43x |
+
+At 11 µs a block, a 1.9M-block chain scan spends ~21 seconds in filter
+matching rather than ~26 minutes.
+
+| Export | Signature |
+| --- | --- |
+| `gcsMatchAny` | `(filter, blockHash, items, params?) => boolean` |
+| `gcsMatchAnyWithKeys` | `(filter, k0: bigint, k1: bigint, items, params?) => boolean` |
+| `FilterMatcher` | `new (items, params?)`, `.matchBlock(filter, blockHash)`, `.matchBlockWithKeys(filter, k0, k1)`, `.size` |
 
 ___
 ## Entry points

@@ -1,5 +1,5 @@
 import { x11Hash, x11HashHex, X11_INPUT_LENGTH, X11_OUTPUT_LENGTH, toBytes, toHex } from 'crypto-toothpick'
-import { hexToBytes, vectors } from './utils/vectors'
+import { hexToBytes, vectors } from './utils/vectors.js'
 
 describe('x11Hash', function () {
   describe('known vectors', function () {

@@ -1,6 +1,6 @@
 import * as x11 from 'crypto-toothpick/native'
 import { x11Hash, x11HashHex, siphash24Hex } from 'crypto-toothpick/native'
-import { hexToBytes, vectors } from './utils/vectors'
+import { hexToBytes, vectors } from './utils/vectors.js'
 
 describe('crypto-toothpick (Node-API)', function () {
   it("module shouldn't be undefined or empty", () => {
