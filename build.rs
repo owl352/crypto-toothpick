@@ -35,13 +35,10 @@ fn setup_wasi() {
     // napi symbols are resolved from the host at instantiation time.
     println!("cargo:rustc-link-arg=--import-undefined");
 
-    // Take the memory from the host rather than defining our own, so JS can
-    // size it up front (see `memory.cjs`) and growth stays off the hot path:
-    // dlmalloc on wasm serves anything its free list cannot cover by calling
-    // `memory.grow`, which replaces the buffer and invalidates every JS view of
-    // it. @emnapi/core rebuilds its views correctly since 1.11 — before that a
-    // grow mid-call detached the view it was writing through.
-    println!("cargo:rustc-link-arg=--import-memory");
+    // The module defines its own memory. dlmalloc on wasm serves anything its
+    // free list cannot cover by calling `memory.grow`, which replaces the
+    // buffer and invalidates every JS view of it; @emnapi/core rebuilds its
+    // views correctly since 1.11, which is why the runtime is pinned there.
     println!("cargo:rustc-link-arg=--max-memory=4294967296");
 
     // lld defaults to a 1MiB stack; the eleven digest contexts x11 chains

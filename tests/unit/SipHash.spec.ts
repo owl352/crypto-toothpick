@@ -2,12 +2,13 @@ import {
   siphash24,
   siphash24Hex,
   siphash24WithKeys,
+  siphash24Many,
   SIPHASH24_KEY_LENGTH,
   SIPHASH24_OUTPUT_LENGTH,
   toBytes
 } from 'crypto-toothpick'
-import { SIPHASH_KEY, siphashMessage, siphashVectors } from './utils/siphashVectors'
-import { hexToBytes } from './utils/vectors'
+import { SIPHASH_KEY, siphashMessage, siphashVectors } from './utils/siphashVectors.js'
+import { hexToBytes } from './utils/vectors.js'
 
 describe('siphash24', function () {
   describe('reference vectors', function () {
@@ -29,6 +30,29 @@ describe('siphash24', function () {
 
         expect(siphash24WithKeys(k0, k1, siphashMessage(length))).toEqual(expected)
       })
+    })
+  })
+
+  describe('batching', function () {
+    test('should hash every item in the reference table in one call', function () {
+      const key = toBytes(SIPHASH_KEY)
+      const view = new DataView(key.buffer, key.byteOffset, key.byteLength)
+      const k0 = view.getBigUint64(0, true)
+      const k1 = view.getBigUint64(8, true)
+      const items = siphashVectors.map((_, length) => siphashMessage(length))
+
+      const batched = siphash24Many(k0, k1, items)
+
+      expect(batched.length).toEqual(items.length)
+      items.forEach((item, i) => {
+        expect(batched[i]).toEqual(siphash24WithKeys(k0, k1, item))
+      })
+    })
+
+    test('should accept hex items and an empty batch', function () {
+      expect(siphash24Many(0n, 0n, [])).toEqual(new BigUint64Array(0))
+      expect(siphash24Many(0n, 0n, ['0001', new Uint8Array([0, 1])]))
+        .toEqual(siphash24Many(0n, 0n, [new Uint8Array([0, 1]), new Uint8Array([0, 1])]))
     })
   })
 
