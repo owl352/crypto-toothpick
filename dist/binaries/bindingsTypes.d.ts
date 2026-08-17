@@ -8,11 +8,50 @@
  * Powered by napi.rs
  */
 /**
+ * A wallet's watched items, held on the Rust side across a sync.
+ *
+ * The set does not change from block to block, but the filter key does, so
+ * every block has to re-hash it. What a block does not have to redo is
+ * carrying the items across the boundary: for a wallet watching a thousand
+ * scripts that copy is most of the per-block cost, and this pays it once.
+ */
+export declare class FilterMatcherNAPI {
+    constructor(items: Array<Uint8Array>, p?: number | undefined | null, m?: BigIntString | undefined | null);
+    /** How many items are being watched. */
+    get size(): number;
+    /** Does this block's filter contain any watched item? */
+    matchBlock(filter: Uint8Array, blockHash: Uint8Array): boolean;
+    /** Same, keyed directly by the two 64-bit halves. */
+    matchBlockWithKeys(filter: Uint8Array, k0: BigIntString, k1: BigIntString): boolean;
+}
+/** Range multiplier of the basic (type 0) filter, from BIP 158. */
+export declare const BASIC_FILTER_M: number;
+/** Golomb-Rice parameter of the basic (type 0) filter, from BIP 158. */
+export declare const BASIC_FILTER_P: number;
+/**
  * 64-bit values cross the boundary as decimal strings, so the binding stays on
  * the same N-API level as the rest of the module and needs no BigInt support
  * from the host. The TypeScript layer converts to and from `bigint`.
  */
 export type BigIntString = string;
+/**
+ * Does this block's compact filter contain any of these items?
+ *
+ * One call answers the whole per-block question a wallet asks during sync:
+ * the Golomb-Rice set is decoded, every item is hashed under the filter key
+ * and mapped into the filter's range, and the two sorted streams are merged —
+ * all without crossing back into JS.
+ *
+ * `blockHash` is the 32-byte hash in internal (wire) byte order, not the
+ * reversed form block explorers display. `p` and `m` default to the basic
+ * filter's parameters.
+ */
+export declare function gcsMatchAny(filter: Uint8Array, blockHash: Uint8Array, items: Array<Uint8Array>, p?: number | undefined | null, m?: BigIntString | undefined | null): boolean;
+/**
+ * Same as [`gcs_match_any`], keyed directly by the two 64-bit halves rather
+ * than by the block hash they are derived from.
+ */
+export declare function gcsMatchAnyWithKeys(filter: Uint8Array, k0: BigIntString, k1: BigIntString, items: Array<Uint8Array>, p?: number | undefined | null, m?: BigIntString | undefined | null): boolean;
 /**
  * SipHash-2-4 under a 16-byte key, as Bitcoin and Dash use it (BIP 158 filter
  * matching, BIP 152 short ids). The digest is the little-endian bytes of the
@@ -25,6 +64,16 @@ export declare const SIPHASH24_KEY_LENGTH: number;
 export declare const SIPHASH24_OUTPUT_LENGTH: number;
 /** Same as [`siphash24`], with the key, the data and the digest as hex strings. */
 export declare function siphash24Hex(key: string, data: string): string;
+/**
+ * Hashes many messages under one key in a single call, returning the digests
+ * concatenated, eight little-endian bytes each.
+ *
+ * Per message this costs a memory copy and the hashing itself, against the
+ * ~200ns of call setup every crossing of the boundary pays. For BIP 158
+ * filter matching — hundreds of short items under one key — that fixed cost is
+ * otherwise the whole bill.
+ */
+export declare function siphash24Many(k0: BigIntString, k1: BigIntString, items: Array<Uint8Array>): Uint8Array;
 /**
  * Same as [`siphash24`], keyed by the two 64-bit halves and returning the
  * 64-bit result — the shape BIP 158 filter matching works in.

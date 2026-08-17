@@ -18,3 +18,11 @@ export declare const SIPHASH24_KEY_LENGTH = 16;
  * Bytes of digest SipHash-2-4 produces.
  */
 export declare const SIPHASH24_OUTPUT_LENGTH = 8;
+/**
+ * Golomb-Rice parameter of the basic (type 0) compact filter, from BIP 158.
+ */
+export declare const BASIC_FILTER_P = 19;
+/**
+ * Range multiplier of the basic (type 0) compact filter, from BIP 158.
+ */
+export declare const BASIC_FILTER_M = 784931n;
