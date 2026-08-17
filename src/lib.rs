@@ -3,6 +3,7 @@
 #![cfg_attr(not(test), no_main)]
 
 pub mod error;
+pub mod gcs;
 pub mod siphash;
 pub mod utils;
 pub mod x11;

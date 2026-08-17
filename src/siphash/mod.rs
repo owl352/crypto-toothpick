@@ -29,6 +29,29 @@ pub fn siphash24_hex(key: String, data: String) -> Result<String, napi::Error> {
     hash::siphash24_hex(&key, &data).with_js_error()
 }
 
+/// Hashes many messages under one key in a single call, returning the digests
+/// concatenated, eight little-endian bytes each.
+///
+/// Per message this costs a memory copy and the hashing itself, against the
+/// ~200ns of call setup every crossing of the boundary pays. For BIP 158
+/// filter matching — hundreds of short items under one key — that fixed cost is
+/// otherwise the whole bill.
+#[napi(js_name = "siphash24Many")]
+pub fn siphash24_many(
+    k0: BigIntString,
+    k1: BigIntString,
+    items: Vec<Uint8Array>,
+) -> Result<Uint8Array, napi::Error> {
+    let (k0, k1) = (k0.try_to_u64()?, k1.try_to_u64()?);
+    let mut digests = Vec::with_capacity(items.len() * hash::SIPHASH24_OUTPUT_LENGTH);
+
+    for item in &items {
+        digests.extend_from_slice(&hash::siphash24_with_keys(k0, k1, item.as_ref()).to_le_bytes());
+    }
+
+    Ok(Uint8Array::from(digests))
+}
+
 /// Same as [`siphash24`], keyed by the two 64-bit halves and returning the
 /// 64-bit result — the shape BIP 158 filter matching works in.
 #[napi(js_name = "siphash24WithKeys")]

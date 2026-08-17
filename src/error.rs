@@ -11,6 +11,7 @@ pub enum HashError {
         actual: usize,
     },
     InvalidHex(hex::FromHexError),
+    MalformedFilter(&'static str),
 }
 
 impl fmt::Display for HashError {
@@ -25,6 +26,7 @@ impl fmt::Display for HashError {
                 "{subject} must be exactly {expected} bytes, got {actual}"
             ),
             HashError::InvalidHex(error) => write!(f, "input must be valid hex: {error}"),
+            HashError::MalformedFilter(reason) => write!(f, "malformed compact filter: {reason}"),
         }
     }
 }
