@@ -2,6 +2,7 @@ import * as x11 from 'crypto-toothpick/wasm'
 import {
   x11Hash,
   x11HashHex,
+  x11HashMany,
   siphash24,
   siphash24Hex,
   cfilterHeaderChain,
@@ -65,5 +66,13 @@ describe('crypto-toothpick (WebAssembly)', function () {
   test('should verify a compact filter against its header', function () {
     expect(cfilterVerify(GENESIS_FILTER, ZERO_HEADER, GENESIS_HEADER)).toEqual(true)
     expect(cfilterVerify('019dfca9', ZERO_HEADER, GENESIS_HEADER)).toEqual(false)
+  })
+
+  test('should hash a run of headers in one call', function () {
+    const headers = vectors.map(({ header }) => header)
+    const many = x11HashMany(headers)
+
+    expect(many.length).toEqual(headers.length * 32)
+    expect(toHex(many)).toEqual(vectors.map(({ digest }) => digest).join(''))
   })
 })

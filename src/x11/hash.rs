@@ -1,6 +1,6 @@
 use rs_x11_hash::get_x11_hash;
 
-use crate::error::{HashError, check_length};
+use crate::error::{HashError, check_length, check_multiple};
 
 /// Size of the input the X11 chain consumes: a Dash block header.
 pub const X11_INPUT_LENGTH: usize = 80;
@@ -18,6 +18,25 @@ pub fn hash(header: &[u8]) -> Result<[u8; X11_OUTPUT_LENGTH], HashError> {
     check_length("x11 input (a block header)", X11_INPUT_LENGTH, header)?;
 
     Ok(get_x11_hash(header))
+}
+
+/// Hashes a run of block headers laid end to end, returning the digests the
+/// same way: [`X11_INPUT_LENGTH`] bytes each in, [`X11_OUTPUT_LENGTH`] each out.
+///
+/// Every header is hashed through [`hash`], so each one is length-checked
+/// before the C implementation sees it — `chunks_exact` cannot hand it a short
+/// slice, and the trailing remainder is rejected up front.
+pub fn hash_many(headers: &[u8]) -> Result<Vec<u8>, HashError> {
+    check_multiple("x11 input (block headers)", X11_INPUT_LENGTH, headers)?;
+
+    let count = headers.len() / X11_INPUT_LENGTH;
+    let mut digests = Vec::with_capacity(count * X11_OUTPUT_LENGTH);
+
+    for header in headers.chunks_exact(X11_INPUT_LENGTH) {
+        digests.extend_from_slice(&hash(header)?);
+    }
+
+    Ok(digests)
 }
 
 /// Same as [`hash`], with the header and the digest as hex strings.
@@ -92,6 +111,54 @@ mod tests {
             hash_hex(&"0".repeat(X11_INPUT_LENGTH * 2 - 1)),
             Err(HashError::InvalidHex(_))
         ));
+    }
+
+    #[test]
+    fn hashes_a_run_of_headers_in_one_call() {
+        let headers: String = VECTORS.iter().map(|(header, _)| *header).collect();
+        let digests: String = VECTORS.iter().map(|(_, digest)| *digest).collect();
+
+        assert_eq!(
+            hex::encode(hash_many(&hex::decode(headers).unwrap()).unwrap()),
+            digests
+        );
+    }
+
+    #[test]
+    fn a_run_agrees_with_the_headers_hashed_one_at_a_time() {
+        let headers = hex::decode(
+            VECTORS
+                .iter()
+                .map(|(header, _)| *header)
+                .collect::<String>(),
+        )
+        .unwrap();
+
+        let one_at_a_time: Vec<u8> = headers
+            .chunks_exact(X11_INPUT_LENGTH)
+            .flat_map(|header| hash(header).unwrap())
+            .collect();
+
+        assert_eq!(hash_many(&headers).unwrap(), one_at_a_time);
+    }
+
+    #[test]
+    fn hashes_nothing_into_nothing() {
+        assert_eq!(hash_many(&[]).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn rejects_a_run_that_is_not_whole_headers() {
+        for len in [1, 79, 81, 159] {
+            assert_eq!(
+                hash_many(&vec![0u8; len]),
+                Err(HashError::NotAMultiple {
+                    subject: "x11 input (block headers)",
+                    unit: X11_INPUT_LENGTH,
+                    actual: len
+                })
+            );
+        }
     }
 
     #[test]

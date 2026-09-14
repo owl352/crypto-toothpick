@@ -55,6 +55,7 @@ siphash24WithKeys(0x0706050403020100n, 0x0f0e0d0c0b0a0908n, new Uint8Array([0, 1
 | --- | --- | --- |
 | `x11Hash` | `(header: Uint8Array \| string) => Uint8Array` | 32-byte digest |
 | `x11HashHex` | `(header: Uint8Array \| string) => string` | same digest, 64 hex chars |
+| `x11HashMany` | `(headers: (Uint8Array \| string)[] \| Uint8Array) => Uint8Array` | 32 bytes per header, concatenated — see below |
 | `siphash24` | `(key: Uint8Array \| string, data: Uint8Array \| string) => Uint8Array` | 8-byte digest, the 64-bit result little-endian |
 | `siphash24Hex` | `(key: Uint8Array \| string, data: Uint8Array \| string) => string` | same digest, 16 hex chars |
 | `siphash24WithKeys` | `(k0: bigint, k1: bigint, data: Uint8Array \| string) => bigint` | keyed by the two 64-bit halves |
@@ -85,8 +86,23 @@ the whole cost. Measured on an M-series mac, per item, 25-byte items:
 
 So hash filter items in one `siphash24Many` call rather than in a loop. Per-call
 is fine once the message is big enough to dwarf the setup: at 1KB the binding is
-~14x a 32-bit JS implementation, and X11 (6.2µs per header) never notices the
-boundary at all.
+~14x a 32-bit JS implementation.
+
+X11 is big enough that the Node-API boundary is a rounding error on it — but
+only on the native path. Measured over 2000 headers:
+
+| | native | WebAssembly |
+| --- | --- | --- |
+| `x11Hash`, one call per header | 6.03 µs | 22.25 µs |
+| `x11HashMany`, one call for 2000 | **5.34 µs** | **7.84 µs** |
+| speedup | 1.13x | **2.84x** |
+
+The wasm crossing costs ~7 µs per byte array in each direction, so a per-header
+call spends 14.4 of its 22.2 µs getting the header in and the digest back out —
+more than twice what X11 itself costs. Over a 2.3M-header sync that is 33
+seconds on the wasm fallback and 1.6 seconds natively, which is why
+`x11HashMany` exists even though X11 looks far too expensive to care about a
+boundary.
 
 ### The input is always 80 bytes
 

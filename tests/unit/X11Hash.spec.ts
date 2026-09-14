@@ -1,4 +1,12 @@
-import { x11Hash, x11HashHex, X11_INPUT_LENGTH, X11_OUTPUT_LENGTH, toBytes, toHex } from 'crypto-toothpick'
+import {
+  x11Hash,
+  x11HashHex,
+  x11HashMany,
+  X11_INPUT_LENGTH,
+  X11_OUTPUT_LENGTH,
+  toBytes,
+  toHex
+} from 'crypto-toothpick'
 import { hexToBytes, vectors } from './utils/vectors.js'
 
 describe('x11Hash', function () {
@@ -80,6 +88,70 @@ describe('x11Hash', function () {
       expect(() => x11Hash(42)).toThrow(TypeError)
       // @ts-expect-error deliberately wrong type
       expect(() => x11HashHex(null)).toThrow(TypeError)
+    })
+  })
+
+  describe('x11HashMany', function () {
+    const headers = vectors.map(({ header }) => header)
+    const digests = vectors.map(({ digest }) => digest)
+
+    function digestsOf (many: Uint8Array): string[] {
+      const out: string[] = []
+
+      for (let at = 0; at < many.length; at += X11_OUTPUT_LENGTH) {
+        out.push(toHex(many.subarray(at, at + X11_OUTPUT_LENGTH)))
+      }
+
+      return out
+    }
+
+    test('should hash a run of known headers', function () {
+      expect(digestsOf(x11HashMany(headers))).toEqual(digests)
+    })
+
+    test('should agree with the headers hashed one at a time', function () {
+      expect(digestsOf(x11HashMany(headers))).toEqual(headers.map(x11HashHex))
+    })
+
+    test('should return one digest per header', function () {
+      expect(x11HashMany(headers).length).toEqual(headers.length * X11_OUTPUT_LENGTH)
+    })
+
+    test('should accept the headers already joined into one buffer', function () {
+      const joined = new Uint8Array(headers.length * X11_INPUT_LENGTH)
+
+      headers.forEach((header, at) => joined.set(toBytes(header), at * X11_INPUT_LENGTH))
+
+      expect(toHex(x11HashMany(joined))).toEqual(toHex(x11HashMany(headers)))
+    })
+
+    test('should accept bytes as readily as hex', function () {
+      expect(toHex(x11HashMany(headers.map(toBytes)))).toEqual(digests.join(''))
+    })
+
+    test('should hash a single header the same as x11Hash', function () {
+      expect(toHex(x11HashMany([headers[0]]))).toEqual(digests[0])
+    })
+
+    test('should hash nothing into nothing', function () {
+      expect(x11HashMany([]).length).toEqual(0)
+      expect(x11HashMany('').length).toEqual(0)
+    })
+
+    test('should hand back a buffer that owns its bytes', function () {
+      const many = x11HashMany(headers)
+
+      expect(many.byteOffset).toEqual(0)
+      expect(many.buffer.byteLength).toEqual(many.length)
+    })
+
+    // The C implementation reads a fixed 80 bytes per header, so a run with a
+    // trailing remainder has to be rejected before it gets there.
+    test('should reject a run that is not whole headers', function () {
+      expect(() => x11HashMany('00'.repeat(X11_INPUT_LENGTH + 1)))
+        .toThrow(/whole number of 80-byte entries/)
+      expect(() => x11HashMany('00'.repeat(X11_INPUT_LENGTH * 2 - 1)))
+        .toThrow(/whole number of 80-byte entries/)
     })
   })
 
