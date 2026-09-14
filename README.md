@@ -164,6 +164,89 @@ matching rather than ~26 minutes.
 | `FilterMatcher` | `new (items, params?)`, `.matchBlock(filter, blockHash)`, `.matchBlockWithKeys(filter, k0, k1)`, `.size` |
 
 ___
+## Compact filter headers (BIP 157)
+
+A `cfheaders` reply is a thousand filter hashes that have to be walked into a
+thousand filter headers, each one `sha256d(filterHash || previousHeader)` over
+the one before it. Done in JS that is two `createHash` allocations per block,
+and the allocations cost an order of magnitude more than the hashing does.
+
+Because every header feeds the next, the walk cannot be split into independent
+pieces the way a batch of hashes can — so `cfilterHeaderChain` takes the whole
+run and does the chaining in Rust, one crossing per chunk instead of one per
+block:
+
+```js
+import { cfilterHeaderChain, CFILTER_HEADER_LENGTH } from 'crypto-toothpick'
+
+// prevHeader is the filter header of the block before the first hash, in
+// internal (wire) byte order
+const headers = cfilterHeaderChain(prevHeader, filterHashes)
+
+// one header per hash, back to back; the last is the chain's new tip
+const tip = headers.subarray(headers.length - CFILTER_HEADER_LENGTH)
+```
+
+`filterHashes` is either a list of 32-byte hashes or one buffer with them
+already joined. The result is always one flat buffer,
+`CFILTER_HEADER_LENGTH` (32) bytes per header, in the order the hashes came in
+— returning a thousand `Uint8Array` objects would spend the batching it was
+meant to win. Slice it with `subarray`, which is a view rather than a copy.
+
+Checking a downloaded filter against that chain is `cfilterVerify`, which folds
+both digests and the comparison into the one call the filter already costs:
+
+```js
+import { cfilterVerify } from 'crypto-toothpick'
+
+if (!cfilterVerify(cfilterPayload, prevHeader, expectedHeader)) {
+  throw new Error('peer served a filter that does not match the header chain')
+}
+```
+
+Every byte string here is in internal (wire) order, like the block hashes the
+rest of the module takes. The BIP's own test vectors print filter headers
+reversed, the way explorers display them, so reverse them before comparing.
+
+| Export | Signature |
+| --- | --- |
+| `cfilterHeaderChain` | `(prev, filterHashes) => Uint8Array` |
+| `cfilterVerify` | `(filter, prev, expected) => boolean` |
+
+### What it costs
+
+Per block, on an M-series mac under Node 22, against the same work done in JS
+with `node:crypto` — the chain measured over 1000-hash chunks, the filter a
+365-byte `cfilter`:
+
+| | JS (`node:crypto`) | native | WebAssembly |
+| --- | --- | --- | --- |
+| `cfilterHeaderChain` | 0.84 µs | **0.30 µs** | **0.36 µs** |
+| `cfilterVerify` | 1.63 µs | **1.18 µs** | 21.4 µs |
+
+The chain is the one that pays: batching a thousand hashes into one call
+amortises the boundary to nothing, and it is ~2.5x faster than JS on both
+surfaces. Over a 2.3M-block restore that is about 1.2 seconds.
+
+`cfilterVerify` is called once per filter, so it pays the boundary once per
+block and only wins on the native path, by about 1.4x. **On the WebAssembly
+path it loses badly** — and not because of anything it does: every crossing
+into the wasm module costs ~7.8 µs per `Uint8Array` argument, against ~0.2 µs
+for the same argument through Node-API.
+
+| binding (byte-array arguments) | native | WebAssembly |
+| --- | --- | --- |
+| `siphash24WithKeys` (1) | 0.19 µs | 7.8 µs |
+| `FilterMatcher.matchBlock` (2) | 0.25 µs | 14.3 µs |
+| `cfilterVerify` (3) | 0.70 µs | 21.5 µs |
+
+That is the rule for the whole module, not just this pair: on WebAssembly only
+batched entry points are worth crossing for. Code that runs on the wasm
+fallback and checks filters one at a time is better off hashing them in JS —
+or collecting a chunk and checking it with `cfilterHeaderChain`, which is what
+the header walk does anyway.
+
+___
 ## Entry points
 
 | Import | Runtime |

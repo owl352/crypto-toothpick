@@ -42,3 +42,22 @@ export function toHex (value: BytesLike): string {
 
   return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
+
+/**
+ * Joins byte strings into one contiguous buffer. The bindings that batch take
+ * a single `Uint8Array` rather than an array of them, so this is what a caller
+ * holding a list of 32-byte hashes hands them.
+ */
+export function concatBytes (values: BytesLike[]): Uint8Array {
+  const parts = values.map(toBytes)
+  const joined = new Uint8Array(parts.reduce((total, part) => total + part.length, 0))
+
+  let offset = 0
+
+  for (const part of parts) {
+    joined.set(part, offset)
+    offset += part.length
+  }
+
+  return joined
+}

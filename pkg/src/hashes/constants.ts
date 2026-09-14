@@ -31,3 +31,9 @@ export const BASIC_FILTER_P = 19
  * Range multiplier of the basic (type 0) compact filter, from BIP 158.
  */
 export const BASIC_FILTER_M = 784931n
+
+/**
+ * Bytes in a compact filter hash, and in a compact filter header. Both are a
+ * double-SHA-256 digest, so both are 32.
+ */
+export const CFILTER_HEADER_LENGTH = 32
