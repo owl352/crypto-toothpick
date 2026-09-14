@@ -31,3 +31,32 @@ export function toHex(value) {
     }
     return Array.from(value, (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
+/**
+ * Joins byte strings into one contiguous buffer. The bindings that batch take
+ * a single `Uint8Array` rather than an array of them, so this is what a caller
+ * holding a list of 32-byte hashes hands them.
+ */
+export function concatBytes(values) {
+    const parts = values.map(toBytes);
+    const joined = new Uint8Array(parts.reduce((total, part) => total + part.length, 0));
+    let offset = 0;
+    for (const part of parts) {
+        joined.set(part, offset);
+        offset += part.length;
+    }
+    return joined;
+}
+/**
+ * Accepts 32-bit values as a typed array or a plain array, and returns them as
+ * a `Uint32Array`. Bindings that take a range of header fields want one
+ * contiguous block rather than a JS array of numbers.
+ */
+export function toUint32Array(values) {
+    if (values instanceof Uint32Array) {
+        return values;
+    }
+    if (!Array.isArray(values)) {
+        throw new TypeError('value must be a Uint32Array or an array of numbers');
+    }
+    return Uint32Array.from(values);
+}

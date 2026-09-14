@@ -23,6 +23,19 @@ export declare class FilterMatcherNAPI {
     matchBlock(filter: Uint8Array, blockHash: Uint8Array): boolean;
     /** Same, keyed directly by the two 64-bit halves. */
     matchBlockWithKeys(filter: Uint8Array, k0: BigIntString, k1: BigIntString): boolean;
+    /**
+     * Does each of these blocks' filters contain any watched item?
+     *
+     * One call for a whole run of blocks: `filters` is every payload laid end
+     * to end, `offsets` marks where each begins (one entry more than there
+     * are blocks), and `blockHashes` is 32 bytes each in the same order. The
+     * answer is one byte per block, 1 for a match.
+     *
+     * Filters arrive one per network message, so a caller has to buffer a run
+     * before it can use this — which delays when a match is known. Worth it
+     * only where the run is already in hand.
+     */
+    matchBlockMany(filters: Uint8Array, offsets: Uint32Array, blockHashes: Uint8Array): Uint8Array;
 }
 /** Range multiplier of the basic (type 0) filter, from BIP 158. */
 export declare const BASIC_FILTER_M: number;
@@ -34,6 +47,59 @@ export declare const BASIC_FILTER_P: number;
  * from the host. The TypeScript layer converts to and from `bigint`.
  */
 export type BigIntString = string;
+/** Size of a compact filter hash, and of a compact filter header. */
+export declare const CFILTER_HEADER_LENGTH: number;
+/**
+ * Walks a run of compact filter hashes into the filter headers they chain to,
+ * starting from `prev`.
+ *
+ * Every header is the input to the next, so the walk cannot be split into
+ * independent pieces the way a batch of hashes can: done here it is one
+ * crossing per chunk of blocks rather than one per block. The hashes arrive
+ * as 32 bytes each, back to back, and the headers come back the same way.
+ *
+ * `prev` is the filter header of the block before the first hash, in internal
+ * (wire) byte order — not the reversed form block explorers display.
+ */
+export declare function cfilterHeaderChain(prev: Uint8Array, filterHashes: Uint8Array): Uint8Array;
+/**
+ * Does this filter hash and chain onto `prev` to give `expected`?
+ *
+ * Both digests and the comparison happen in one call, which is what a filter
+ * already costs at the boundary. All three byte strings are in internal (wire)
+ * byte order.
+ */
+export declare function cfilterVerify(filter: Uint8Array, prev: Uint8Array, expected: Uint8Array): boolean;
+/**
+ * Blocks DarkGravityWave averages its target over, and so the least context
+ * every range needs in front of it. The default; see `pastBlocks`.
+ */
+export declare const DGW_PAST_BLOCKS: number;
+/** Dash mainnet's proof-of-work limit, in compact form. */
+export declare const DGW_POW_LIMIT: number;
+/** Dash's target block spacing, in seconds. */
+export declare const DGW_TARGET_SPACING: number;
+/**
+ * The nBits every block of a range is expected to carry under DarkGravityWave
+ * v3, given the `contextBlocks` entries that precede it.
+ *
+ * `times` and `nbits` run oldest first over one contiguous run of headers, and
+ * are the same length; the leading `contextBlocks` entries seed the averaging
+ * window and get no answer of their own, so the result holds
+ * `times.length - contextBlocks` values. Batched this way a whole mainnet sync
+ * is ~1150 calls rather than 2.3M, which is what keeps it worth crossing the
+ * boundary for on the WebAssembly surface as well as the native one.
+ *
+ * All of it is u256 integer arithmetic, so both surfaces agree by
+ * construction. The era dispatch — calling this only where v3 governs — and
+ * the comparison against what a header really carries stay with the caller.
+ *
+ * `powLimit`, `targetSpacing` and `pastBlocks` default to Dash's. The first
+ * two vary between Dash's own networks; the window does not, and only a
+ * DGW-derived chain that chose a different one should be overriding it.
+ * `contextBlocks` may be larger than `pastBlocks`, never smaller.
+ */
+export declare function dgwNextBitsRange(times: Uint32Array, nbits: Uint32Array, contextBlocks: number, powLimit?: number | undefined | null, targetSpacing?: number | undefined | null, pastBlocks?: number | undefined | null): Uint32Array;
 /**
  * Does this block's compact filter contain any of these items?
  *
@@ -90,3 +156,14 @@ export declare const X11_OUTPUT_LENGTH: number;
 export declare function x11Hash(input: Uint8Array): Uint8Array;
 /** Same as [`x11_hash`], with the header and the digest as hex strings. */
 export declare function x11HashHex(input: string): string;
+/**
+ * Hashes a run of 80-byte block headers in a single call, returning the
+ * digests concatenated, 32 bytes each.
+ *
+ * Headers arrive from the network in batches of up to 2000, so the call site
+ * is a loop that already exists. Hashing them one at a time pays a crossing
+ * per header, in and out: measured over 2000 headers that is 0.69 µs of the
+ * 6.03 µs a native call costs, but 14.4 µs of the 22.2 µs it costs through
+ * WebAssembly, where the crossing costs twice what X11 itself does.
+ */
+export declare function x11HashMany(headers: Uint8Array): Uint8Array;
