@@ -29,6 +29,7 @@ pub enum HashError {
         right_len: usize,
     },
     InvalidTarget(u32),
+    BadOffsets(&'static str),
     SpanOverflow {
         past_blocks: usize,
         target_spacing: u32,
@@ -77,6 +78,7 @@ impl fmt::Display for HashError {
             HashError::InvalidTarget(compact) => {
                 write!(f, "nBits {compact:#010x} is not a valid target")
             }
+            HashError::BadOffsets(reason) => write!(f, "filter offsets {reason}"),
             HashError::SpanOverflow {
                 past_blocks,
                 target_spacing,

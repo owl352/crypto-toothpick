@@ -177,7 +177,46 @@ matching rather than ~26 minutes.
 | --- | --- |
 | `gcsMatchAny` | `(filter, blockHash, items, params?) => boolean` |
 | `gcsMatchAnyWithKeys` | `(filter, k0: bigint, k1: bigint, items, params?) => boolean` |
-| `FilterMatcher` | `new (items, params?)`, `.matchBlock(filter, blockHash)`, `.matchBlockWithKeys(filter, k0, k1)`, `.size` |
+| `FilterMatcher` | `new (items, params?)`, `.matchBlock(filter, blockHash)`, `.matchBlockWithKeys(filter, k0, k1)`, `.matchBlockMany(filters, blockHashes)`, `.size` |
+
+### Matching a run of blocks
+
+Following the tip, one filter arrives per network message and `matchBlock` is
+the right call. But where a run is already in hand — a rescan, a backfill,
+catching up after downtime — `matchBlockMany` takes the whole run in one
+crossing:
+
+```js
+const hits = matcher.matchBlockMany(filters, blockHashes)
+
+for (let at = 0; at < hits.length; at++) {
+  if (hits[at] !== 0) await downloadBlock(blockHashes[at])
+}
+```
+
+It answers one byte per block, 1 for a match, in the order given. The filters
+are joined and their offsets derived for you.
+
+The work per block is identical either way — the filter key changes with every
+block, so the watched set is re-hashed regardless. What batching removes is the
+boundary, and that is worth almost nothing natively and a great deal on
+WebAssembly. Per block, over a 2000-block run with 170-byte filters and 50
+watched items:
+
+| | native | WebAssembly |
+| --- | --- | --- |
+| `matchBlock`, one call per block | 5.52 µs | 22.68 µs |
+| `matchBlockMany`, one call | **5.40 µs** | **5.74 µs** |
+| speedup | 1.02x | **3.95x** |
+| over 2.3M blocks | ~0.3 s | **~39 s** |
+
+On the native path it is not worth restructuring for. On the wasm fallback it
+collapses the per-block crossing that otherwise costs four times what the
+matching itself does — and it brings the two surfaces to within 6% of each
+other, where per-block they differ by 4x.
+
+The cost is that you must buffer a run before you can use it, which delays when
+any single match becomes known. That trade is why `matchBlock` stays.
 
 ___
 ## Compact filter headers (BIP 157)

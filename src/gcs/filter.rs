@@ -1,4 +1,4 @@
-use crate::error::{HashError, check_length};
+use crate::error::{HashError, check_length, check_multiple};
 use crate::siphash::hash::siphash24_with_keys;
 
 /// Golomb-Rice parameter of the basic (type 0) filter, from BIP 158.
@@ -168,6 +168,66 @@ fn read_le(buf: &[u8], offset: usize, size: usize) -> Result<u64, HashError> {
 /// set, hash every item under the filter key, map it into the filter's range,
 /// and merge the two sorted streams. Nothing crosses back into JS until the
 /// answer is known.
+/// Matches a run of blocks against their filters in a single pass.
+///
+/// `filters` is every `cfilter` payload laid end to end and `offsets` says
+/// where each one sits: entry `i` spans `offsets[i]..offsets[i + 1]`, so there
+/// is one offset more than there are blocks. `block_hashes` is 32 bytes each,
+/// in the same order. The answer is one byte per block, 1 for a match.
+///
+/// The watched items are hashed per block either way — the filter key changes
+/// with every block — so what this saves is the boundary, not the work.
+pub fn match_many(
+    filters: &[u8],
+    offsets: &[u32],
+    block_hashes: &[u8],
+    items: &[&[u8]],
+    p: u8,
+    m: u64,
+) -> Result<Vec<u8>, HashError> {
+    check_multiple("block hashes", BLOCK_HASH_LENGTH, block_hashes)?;
+
+    let count = block_hashes.len() / BLOCK_HASH_LENGTH;
+
+    if offsets.len() != count + 1 {
+        return Err(HashError::BadOffsets(
+            "must have one entry more than there are block hashes",
+        ));
+    }
+
+    // With every consecutive pair checked below and the last offset pinned to
+    // the payload length, every offset is in bounds and no slice can panic.
+    if offsets[count] as usize != filters.len() {
+        return Err(HashError::BadOffsets(
+            "must end at the length of the filter payload",
+        ));
+    }
+
+    let mut matches = Vec::with_capacity(count);
+
+    for at in 0..count {
+        let (start, end) = (offsets[at] as usize, offsets[at + 1] as usize);
+
+        if end < start {
+            return Err(HashError::BadOffsets("must not go backwards"));
+        }
+
+        let hash = &block_hashes[at * BLOCK_HASH_LENGTH..(at + 1) * BLOCK_HASH_LENGTH];
+        let (k0, k1) = filter_key(hash)?;
+
+        matches.push(u8::from(match_any(
+            &filters[start..end],
+            k0,
+            k1,
+            items,
+            p,
+            m,
+        )?));
+    }
+
+    Ok(matches)
+}
+
 pub fn match_any(
     filter: &[u8],
     k0: u64,
@@ -284,6 +344,162 @@ mod tests {
             .collect();
 
         encode(&scaled, BASIC_FILTER_P)
+    }
+
+    /// A run of blocks: each gets its own hash, its own filter built under that
+    /// hash's key, and a member that only that block's filter contains.
+    fn run(count: usize) -> (Vec<u8>, Vec<u32>, Vec<u8>, Vec<Vec<u8>>) {
+        let mut payload = Vec::new();
+        let mut offsets = vec![0u32];
+        let mut hashes = Vec::new();
+        let mut members = Vec::new();
+
+        for block in 0..count as u8 {
+            let mut hash = [0u8; BLOCK_HASH_LENGTH];
+            hash[0] = block.wrapping_mul(31).wrapping_add(7);
+            hash[8] = block.wrapping_mul(11).wrapping_add(3);
+
+            let (k0, k1) = filter_key(&hash).unwrap();
+            let member = vec![0x55, block, block.wrapping_mul(5)];
+            let others: Vec<Vec<u8>> = (0..8u8)
+                .map(|i| vec![0xaa, block, i.wrapping_mul(3)])
+                .collect();
+
+            let mut all: Vec<&[u8]> = others.iter().map(|o| o.as_slice()).collect();
+            all.push(&member);
+
+            payload.extend_from_slice(&build(&all, k0, k1));
+            offsets.push(payload.len() as u32);
+            hashes.extend_from_slice(&hash);
+            members.push(member);
+        }
+
+        (payload, offsets, hashes, members)
+    }
+
+    #[test]
+    fn a_run_agrees_with_the_blocks_matched_one_at_a_time() {
+        let (payload, offsets, hashes, members) = run(12);
+        // watch the member that only block 5 carries
+        let watched = vec![members[5].clone()];
+        let items: Vec<&[u8]> = watched.iter().map(|w| w.as_slice()).collect();
+
+        let batch = match_many(
+            &payload,
+            &offsets,
+            &hashes,
+            &items,
+            BASIC_FILTER_P,
+            BASIC_FILTER_M,
+        )
+        .unwrap();
+
+        let one_at_a_time: Vec<u8> = (0..12)
+            .map(|at| {
+                let hash = &hashes[at * BLOCK_HASH_LENGTH..(at + 1) * BLOCK_HASH_LENGTH];
+                let (k0, k1) = filter_key(hash).unwrap();
+                let filter = &payload[offsets[at] as usize..offsets[at + 1] as usize];
+
+                u8::from(match_any(filter, k0, k1, &items, BASIC_FILTER_P, BASIC_FILTER_M).unwrap())
+            })
+            .collect();
+
+        assert_eq!(batch, one_at_a_time);
+        assert_eq!(batch[5], 1, "block 5 carries the watched item");
+        assert_eq!(batch.iter().map(|b| u32::from(*b)).sum::<u32>(), 1);
+    }
+
+    #[test]
+    fn a_run_answers_one_byte_per_block() {
+        let (payload, offsets, hashes, members) = run(7);
+        let watched = vec![members[0].clone(), members[6].clone()];
+        let items: Vec<&[u8]> = watched.iter().map(|w| w.as_slice()).collect();
+
+        let batch = match_many(
+            &payload,
+            &offsets,
+            &hashes,
+            &items,
+            BASIC_FILTER_P,
+            BASIC_FILTER_M,
+        )
+        .unwrap();
+
+        assert_eq!(batch.len(), 7);
+        assert_eq!(batch, vec![1, 0, 0, 0, 0, 0, 1]);
+    }
+
+    #[test]
+    fn a_run_of_nothing_matches_nothing() {
+        assert_eq!(
+            match_many(&[], &[0], &[], &[], BASIC_FILTER_P, BASIC_FILTER_M).unwrap(),
+            Vec::<u8>::new()
+        );
+    }
+
+    #[test]
+    fn rejects_offsets_that_do_not_describe_the_run() {
+        let (payload, offsets, hashes, _) = run(4);
+
+        // one short
+        assert_eq!(
+            match_many(
+                &payload,
+                &offsets[..4],
+                &hashes,
+                &[],
+                BASIC_FILTER_P,
+                BASIC_FILTER_M
+            ),
+            Err(HashError::BadOffsets(
+                "must have one entry more than there are block hashes"
+            ))
+        );
+
+        // does not reach the end of the payload
+        let mut truncated = offsets.clone();
+        truncated[4] -= 1;
+        assert_eq!(
+            match_many(
+                &payload,
+                &truncated,
+                &hashes,
+                &[],
+                BASIC_FILTER_P,
+                BASIC_FILTER_M
+            ),
+            Err(HashError::BadOffsets(
+                "must end at the length of the filter payload"
+            ))
+        );
+
+        // runs backwards in the middle
+        let mut backwards = offsets.clone();
+        backwards[1] = offsets[2];
+        backwards[2] = offsets[1];
+        assert_eq!(
+            match_many(
+                &payload,
+                &backwards,
+                &hashes,
+                &[],
+                BASIC_FILTER_P,
+                BASIC_FILTER_M
+            ),
+            Err(HashError::BadOffsets("must not go backwards"))
+        );
+    }
+
+    #[test]
+    fn rejects_hashes_that_are_not_whole_block_hashes() {
+        assert_eq!(
+            match_many(&[], &[0], &[0u8; 31], &[], BASIC_FILTER_P, BASIC_FILTER_M),
+            Err(HashError::NotAMultiple {
+                subject: "block hashes",
+                unit: BLOCK_HASH_LENGTH,
+                actual: 31
+            })
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 pub mod filter;
 
-use napi::bindgen_prelude::Uint8Array;
+use napi::bindgen_prelude::{Uint8Array, Uint32Array};
 use napi_derive::napi;
 
 use crate::utils::{BigIntString, TryToU64, WithJsError};
@@ -68,6 +68,40 @@ impl FilterMatcherNAPI {
         k1: BigIntString,
     ) -> Result<bool, napi::Error> {
         self.match_with_keys(filter.as_ref(), k0.try_to_u64()?, k1.try_to_u64()?)
+    }
+
+    /// Does each of these blocks' filters contain any watched item?
+    ///
+    /// One call for a whole run of blocks: `filters` is every payload laid end
+    /// to end, `offsets` marks where each begins (one entry more than there
+    /// are blocks), and `blockHashes` is 32 bytes each in the same order. The
+    /// answer is one byte per block, 1 for a match.
+    ///
+    /// Filters arrive one per network message, so a caller has to buffer a run
+    /// before it can use this — which delays when a match is known. Worth it
+    /// only where the run is already in hand.
+    #[napi(js_name = "matchBlockMany")]
+    pub fn match_block_many(
+        &self,
+        filters: Uint8Array,
+        offsets: Uint32Array,
+        block_hashes: Uint8Array,
+    ) -> Result<Uint8Array, napi::Error> {
+        // Hoisted out of the loop: `matchBlock` rebuilds this per call, and
+        // over a run that copy is most of what batching is meant to remove.
+        let items: Vec<&[u8]> = self.items.iter().map(|item| item.as_slice()).collect();
+
+        let matches = filter::match_many(
+            filters.as_ref(),
+            offsets.as_ref(),
+            block_hashes.as_ref(),
+            &items,
+            self.p,
+            self.m,
+        )
+        .with_js_error()?;
+
+        Ok(Uint8Array::from(matches))
     }
 
     fn match_with_keys(&self, filter: &[u8], k0: u64, k1: u64) -> Result<bool, napi::Error> {

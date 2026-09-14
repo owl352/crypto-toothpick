@@ -4,6 +4,7 @@ import {
   x11HashHex,
   x11HashMany,
   dgwNextBitsRange,
+  FilterMatcher,
   siphash24Hex,
   cfilterHeaderChain,
   cfilterVerify,
@@ -73,5 +74,16 @@ describe('crypto-toothpick (Node-API)', function () {
 
     expect(Array.from(dgwNextBitsRange(times, nbits, 24)))
       .toEqual(nextBitsRange(times, nbits, 24))
+  })
+
+  test('should match a run of blocks against their filters', function () {
+    const hash = new Uint8Array(32).fill(0x11)
+    const matcher = new FilterMatcher([new Uint8Array([0x55, 1, 2])])
+    // an empty filter claims no entries, so every answer here is a miss —
+    // what is under test is that the run comes back one byte per block
+    const hits = matcher.matchBlockMany(['00', '00', '00'], [hash, hash, hash])
+
+    expect(hits.length).toEqual(3)
+    expect(Array.from(hits)).toEqual([0, 0, 0])
   })
 })
