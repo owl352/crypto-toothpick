@@ -51,6 +51,37 @@ describe('crypto-toothpick (WebAssembly)', function () {
     expect(siphash24(SIPHASH_KEY, new Uint8Array(1024 * 1024)).length).toEqual(8)
   })
 
+  // The two calls below run at the sizes the batched API was actually reshaped
+  // for — a `getcfheaders` reply is 1000 hashes and a `headers` batch is 2000 —
+  // which is where the allocator reliably calls `memory.grow`. That growth
+  // replaces the buffer under emnapi's cached HEAP_DATA_VIEW, and a runtime
+  // that does not rebuild it fails here with "detached ArrayBuffer" rather than
+  // returning a wrong answer. @emnapi/core rebuilds correctly from 1.11; the
+  // package pins at or above that, and these are what hold the pin honest.
+  test('should chain a full getcfheaders chunk across a memory grow', function () {
+    const prev = toBytes(GENESIS_HEADER)
+    const hashes = sampleFilterHashes(1000)
+    const chained = cfilterHeaderChain(prev, hashes)
+
+    expect(chained.length).toEqual(1000 * 32)
+    expect(toHex(chained)).toEqual(chainReference(prev, hashes).map(toHex).join(''))
+  })
+
+  test('should hash a full header batch across a memory grow', function () {
+    const { header, digest } = vectors[0]
+    const one = toBytes(header)
+    const batch = new Uint8Array(2000 * 80)
+
+    for (let at = 0; at < 2000; at++) batch.set(one, at * 80)
+
+    const digests = x11HashMany(batch)
+
+    expect(digests.length).toEqual(2000 * 32)
+    // spot-check both ends rather than build a 2000-entry expectation
+    expect(toHex(digests.subarray(0, 32))).toEqual(digest)
+    expect(toHex(digests.subarray(1999 * 32))).toEqual(digest)
+  })
+
   test('should reject a header of the wrong length', function () {
     expect(() => x11Hash(new Uint8Array(64))).toThrow(/80 bytes/)
   })

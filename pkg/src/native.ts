@@ -1,5 +1,12 @@
-import protocol from '../binaries/node.cjs'
+import nodeBinding from '../binaries/node.cjs'
 import { hashesProvider } from './hashes/provider.js'
+import { HashBindings } from './hashes/types.js'
+
+// `node.cjs` assigns `module.exports` at run time, so it has no statically
+// visible default export and the import lands as `any`. Naming the type here
+// is what keeps the re-exported constants below typed as numbers rather than
+// silently degrading every Node consumer to `any`.
+const protocol = nodeBinding as HashBindings
 
 hashesProvider.setHashes(protocol)
 
