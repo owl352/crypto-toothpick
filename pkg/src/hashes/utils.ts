@@ -61,3 +61,20 @@ export function concatBytes (values: BytesLike[]): Uint8Array {
 
   return joined
 }
+
+/**
+ * Accepts 32-bit values as a typed array or a plain array, and returns them as
+ * a `Uint32Array`. Bindings that take a range of header fields want one
+ * contiguous block rather than a JS array of numbers.
+ */
+export function toUint32Array (values: Uint32Array | number[]): Uint32Array {
+  if (values instanceof Uint32Array) {
+    return values
+  }
+
+  if (!Array.isArray(values)) {
+    throw new TypeError('value must be a Uint32Array or an array of numbers')
+  }
+
+  return Uint32Array.from(values)
+}

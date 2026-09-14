@@ -3,6 +3,7 @@ import {
   x11Hash,
   x11HashHex,
   x11HashMany,
+  dgwNextBitsRange,
   siphash24Hex,
   cfilterHeaderChain,
   cfilterVerify,
@@ -17,6 +18,7 @@ import {
   chainReference,
   sampleFilterHashes
 } from './utils/cfheaderVectors.js'
+import { nextBitsRange, sampleChain } from './utils/dgwVectors.js'
 
 describe('crypto-toothpick (Node-API)', function () {
   it("module shouldn't be undefined or empty", () => {
@@ -62,5 +64,14 @@ describe('crypto-toothpick (Node-API)', function () {
 
     expect(many.length).toEqual(headers.length * 32)
     expect(toHex(many)).toEqual(vectors.map(({ digest }) => digest).join(''))
+  })
+
+  // Checked against the BigInt reference on both surfaces, so the u256
+  // arithmetic agreeing across them is a test rather than a convention.
+  test('should retarget a range of headers', function () {
+    const { times, nbits } = sampleChain(224)
+
+    expect(Array.from(dgwNextBitsRange(times, nbits, 24)))
+      .toEqual(nextBitsRange(times, nbits, 24))
   })
 })

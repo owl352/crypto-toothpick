@@ -263,6 +263,104 @@ or collecting a chunk and checking it with `cfilterHeaderChain`, which is what
 the header walk does anyway.
 
 ___
+## Difficulty (DarkGravityWave v3)
+
+Every Dash block retargets, so validating a header batch means running
+DarkGravityWave over each of its blocks: a weighted average of the previous 24
+targets, a clamped timespan, and a ratio — all in 256-bit integer arithmetic
+that JS can only do in `BigInt`.
+
+`dgwNextBitsRange` does the whole batch in one call. Headers already arrive up
+to 2000 at a time, so a full mainnet sync is ~1150 calls rather than 2.3M:
+
+```js
+import { dgwNextBitsRange, DGW_PAST_BLOCKS } from 'crypto-toothpick'
+
+// oldest first; the first DGW_PAST_BLOCKS entries are the already-validated
+// blocks before the batch, and seed the averaging window
+const expected = dgwNextBitsRange(times, nbits, DGW_PAST_BLOCKS)
+
+for (let at = 0; at < expected.length; at++) {
+  if (nbits[DGW_PAST_BLOCKS + at] !== expected[at]) {
+    throw new Error(`block ${at} carries the wrong nBits`)
+  }
+}
+```
+
+`times` and `nbits` are each header's `nTime` and `nBits`, oldest first, same
+length, as `Uint32Array`s or plain arrays. The result holds
+`times.length - contextBlocks` values, lining up with the headers from
+`contextBlocks` onward.
+
+`contextBlocks` is how many leading entries are already-validated context
+rather than blocks you want answers for. It must be at least the averaging
+window; more is fine and simply starts the answers later, without changing what
+any of them is.
+
+### Chain parameters
+
+An optional fourth argument overrides what the rule assumes about the chain:
+
+| | default | |
+| --- | --- | --- |
+| `powLimit` | `DGW_POW_LIMIT` (`0x1e0fffff`) | easiest target, as compact nBits |
+| `targetSpacing` | `DGW_TARGET_SPACING` (150) | seconds between blocks |
+| `pastBlocks` | `DGW_PAST_BLOCKS` (24) | blocks the target is averaged over |
+
+```js
+// a DGW-derived chain with a half-hour window and one-minute blocks
+dgwNextBitsRange(times, nbits, 30, { pastBlocks: 30, targetSpacing: 60 })
+```
+
+The first two differ between Dash's own networks, so anything running against
+testnet, devnet or regtest will set them. `pastBlocks` does not — the 24-block
+window is the same everywhere Dash runs — so reach for it only on a chain that
+inherited DarkGravityWave and picked a different one. Changing it changes
+consensus.
+
+Note that `pastBlocks` sets the whole window, not just the count: the target
+timespan is `pastBlocks × targetSpacing`, so a wider window expects a
+proportionally longer span.
+
+### What stays in JS
+
+Deliberately not in here, because it would be wrong to move:
+
+- **The era dispatch.** Call this only where v3 governs. KGW's event horizon is
+  `f64::powf`, and a one-ulp split between the native and WebAssembly builds
+  would move where its walk stops — which is the DGW v1/v2 failure Dash still
+  carries a permanent ±50% tolerance band for.
+- **The accept test.** Mainnet at or below height 68589 compares difficulty as
+  a float. Nothing consensus-facing crosses this boundary as a float, so the
+  comparison stays with the caller; this function only says what the nBits
+  should be.
+
+Everything that does cross is u256 integer arithmetic, so the two surfaces
+agree by construction — and the test suite checks both against the same
+`BigInt` reference rather than against each other.
+
+### What it costs
+
+Per block, over a 2000-block batch, against a tight `BigInt` implementation of
+the same rule:
+
+| | JS (`BigInt`) | native | WebAssembly |
+| --- | --- | --- | --- |
+| per block | 1.78 µs | **0.86 µs** | **1.33 µs** |
+| speedup | — | 2.1x | 1.2x |
+| over 2.3M blocks | — | ~2.1 s | ~0.6 s |
+
+The JS column is a purpose-built reference that does nothing but the
+arithmetic, so those savings are a floor: a real validator walking header
+objects and allocating `BigInt`s per block starts further behind.
+
+The shape matters more than the speed. Called once per block instead of once
+per batch, this would cost ~14 µs a block on the WebAssembly fallback — about
+30 seconds across a sync, swamping everything it saves. Batching it amortises
+the crossing to roughly 8 ns a block, which is why it wins on both surfaces
+instead of trading one against the other.
+
+___
 ## Entry points
 
 | Import | Runtime |

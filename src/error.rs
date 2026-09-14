@@ -17,6 +17,22 @@ pub enum HashError {
         unit: usize,
         actual: usize,
     },
+    NotEnough {
+        subject: &'static str,
+        needed: usize,
+        actual: usize,
+    },
+    Mismatched {
+        left: &'static str,
+        right: &'static str,
+        left_len: usize,
+        right_len: usize,
+    },
+    InvalidTarget(u32),
+    SpanOverflow {
+        past_blocks: usize,
+        target_spacing: u32,
+    },
 }
 
 impl fmt::Display for HashError {
@@ -39,6 +55,34 @@ impl fmt::Display for HashError {
             } => write!(
                 f,
                 "{subject} must be a whole number of {unit}-byte entries, got {actual}"
+            ),
+            HashError::NotEnough {
+                subject,
+                needed,
+                actual,
+            } => write!(
+                f,
+                "{subject} must be at least {needed} {}, got {actual}",
+                if *needed == 1 { "entry" } else { "entries" }
+            ),
+            HashError::Mismatched {
+                left,
+                right,
+                left_len,
+                right_len,
+            } => write!(
+                f,
+                "{left} and {right} must be the same length, got {left_len} and {right_len}"
+            ),
+            HashError::InvalidTarget(compact) => {
+                write!(f, "nBits {compact:#010x} is not a valid target")
+            }
+            HashError::SpanOverflow {
+                past_blocks,
+                target_spacing,
+            } => write!(
+                f,
+                "a window of {past_blocks} blocks at {target_spacing}s spacing is too long to measure"
             ),
         }
     }

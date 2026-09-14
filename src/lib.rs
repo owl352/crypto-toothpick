@@ -3,6 +3,7 @@
 #![cfg_attr(not(test), no_main)]
 
 pub mod cfheaders;
+pub mod dgw;
 pub mod error;
 pub mod gcs;
 pub mod siphash;
