@@ -110,5 +110,62 @@ describe('compact filter matching', function () {
     test('should reject a block hash of the wrong length', function () {
       expect(() => new FilterMatcher([member]).matchBlock(filter, '0011')).toThrow(/32 bytes/)
     })
+
+    describe('matchBlockMany', function () {
+      // the same block repeated is enough to check the plumbing: every entry
+      // has to come back with the answer matchBlock gives for it
+      const run = [filter, filter, filter]
+      const hashes = [blockHash, blockHash, blockHash]
+
+      test('should agree with the blocks matched one at a time', function () {
+        const matcher = new FilterMatcher([member])
+
+        expect(Array.from(matcher.matchBlockMany(run, hashes)))
+          .toEqual(run.map((f, at) => (matcher.matchBlock(f, hashes[at]) ? 1 : 0)))
+      })
+
+      test('should answer one byte per block', function () {
+        const matcher = new FilterMatcher([member])
+
+        expect(matcher.matchBlockMany(run, hashes).length).toEqual(3)
+        expect(Array.from(matcher.matchBlockMany(run, hashes))).toEqual([1, 1, 1])
+      })
+
+      test('should miss where nothing is watched', function () {
+        expect(Array.from(new FilterMatcher([stranger]).matchBlockMany(run, hashes)))
+          .toEqual([0, 0, 0])
+      })
+
+      test('should handle filters of differing lengths in one run', function () {
+        const matcher = new FilterMatcher([member])
+        // an empty filter claims no entries, so it can never match
+        const mixed = [filter, '00', filter]
+
+        expect(Array.from(matcher.matchBlockMany(mixed, hashes))).toEqual([1, 0, 1])
+      })
+
+      test('should answer nothing for an empty run', function () {
+        expect(new FilterMatcher([member]).matchBlockMany([], []).length).toEqual(0)
+      })
+
+      test('should accept the hashes already joined into one buffer', function () {
+        const matcher = new FilterMatcher([member])
+        const joined = new Uint8Array(3 * 32)
+
+        hashes.forEach((h, at) => joined.set(toBytes(h), at * 32))
+
+        expect(Array.from(matcher.matchBlockMany(run, joined))).toEqual([1, 1, 1])
+      })
+
+      test('should reject a run whose hashes do not line up', function () {
+        expect(() => new FilterMatcher([member]).matchBlockMany(run, hashes.slice(0, 2)))
+          .toThrow(/one entry more than there are block hashes/)
+      })
+
+      test('should reject hashes that are not whole block hashes', function () {
+        expect(() => new FilterMatcher([member]).matchBlockMany(run, ['0011']))
+          .toThrow(/whole number of 32-byte entries/)
+      })
+    })
   })
 })

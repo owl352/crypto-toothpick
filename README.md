@@ -55,6 +55,7 @@ siphash24WithKeys(0x0706050403020100n, 0x0f0e0d0c0b0a0908n, new Uint8Array([0, 1
 | --- | --- | --- |
 | `x11Hash` | `(header: Uint8Array \| string) => Uint8Array` | 32-byte digest |
 | `x11HashHex` | `(header: Uint8Array \| string) => string` | same digest, 64 hex chars |
+| `x11HashMany` | `(headers: (Uint8Array \| string)[] \| Uint8Array) => Uint8Array` | 32 bytes per header, concatenated — see below |
 | `siphash24` | `(key: Uint8Array \| string, data: Uint8Array \| string) => Uint8Array` | 8-byte digest, the 64-bit result little-endian |
 | `siphash24Hex` | `(key: Uint8Array \| string, data: Uint8Array \| string) => string` | same digest, 16 hex chars |
 | `siphash24WithKeys` | `(k0: bigint, k1: bigint, data: Uint8Array \| string) => bigint` | keyed by the two 64-bit halves |
@@ -85,8 +86,23 @@ the whole cost. Measured on an M-series mac, per item, 25-byte items:
 
 So hash filter items in one `siphash24Many` call rather than in a loop. Per-call
 is fine once the message is big enough to dwarf the setup: at 1KB the binding is
-~14x a 32-bit JS implementation, and X11 (6.2µs per header) never notices the
-boundary at all.
+~14x a 32-bit JS implementation.
+
+X11 is big enough that the Node-API boundary is a rounding error on it — but
+only on the native path. Measured over 2000 headers:
+
+| | native | WebAssembly |
+| --- | --- | --- |
+| `x11Hash`, one call per header | 6.03 µs | 22.25 µs |
+| `x11HashMany`, one call for 2000 | **5.34 µs** | **7.84 µs** |
+| speedup | 1.13x | **2.84x** |
+
+The wasm crossing costs ~7 µs per byte array in each direction, so a per-header
+call spends 14.4 of its 22.2 µs getting the header in and the digest back out —
+more than twice what X11 itself costs. Over a 2.3M-header sync that is 33
+seconds on the wasm fallback and 1.6 seconds natively, which is why
+`x11HashMany` exists even though X11 looks far too expensive to care about a
+boundary.
 
 ### The input is always 80 bytes
 
@@ -161,7 +177,227 @@ matching rather than ~26 minutes.
 | --- | --- |
 | `gcsMatchAny` | `(filter, blockHash, items, params?) => boolean` |
 | `gcsMatchAnyWithKeys` | `(filter, k0: bigint, k1: bigint, items, params?) => boolean` |
-| `FilterMatcher` | `new (items, params?)`, `.matchBlock(filter, blockHash)`, `.matchBlockWithKeys(filter, k0, k1)`, `.size` |
+| `FilterMatcher` | `new (items, params?)`, `.matchBlock(filter, blockHash)`, `.matchBlockWithKeys(filter, k0, k1)`, `.matchBlockMany(filters, blockHashes)`, `.size` |
+
+### Matching a run of blocks
+
+Following the tip, one filter arrives per network message and `matchBlock` is
+the right call. But where a run is already in hand — a rescan, a backfill,
+catching up after downtime — `matchBlockMany` takes the whole run in one
+crossing:
+
+```js
+const hits = matcher.matchBlockMany(filters, blockHashes)
+
+for (let at = 0; at < hits.length; at++) {
+  if (hits[at] !== 0) await downloadBlock(blockHashes[at])
+}
+```
+
+It answers one byte per block, 1 for a match, in the order given. The filters
+are joined and their offsets derived for you.
+
+The work per block is identical either way — the filter key changes with every
+block, so the watched set is re-hashed regardless. What batching removes is the
+boundary, and that is worth almost nothing natively and a great deal on
+WebAssembly. Per block, over a 2000-block run with 170-byte filters and 50
+watched items:
+
+| | native | WebAssembly |
+| --- | --- | --- |
+| `matchBlock`, one call per block | 5.52 µs | 22.68 µs |
+| `matchBlockMany`, one call | **5.40 µs** | **5.74 µs** |
+| speedup | 1.02x | **3.95x** |
+| over 2.3M blocks | ~0.3 s | **~39 s** |
+
+On the native path it is not worth restructuring for. On the wasm fallback it
+collapses the per-block crossing that otherwise costs four times what the
+matching itself does — and it brings the two surfaces to within 6% of each
+other, where per-block they differ by 4x.
+
+The cost is that you must buffer a run before you can use it, which delays when
+any single match becomes known. That trade is why `matchBlock` stays.
+
+___
+## Compact filter headers (BIP 157)
+
+A `cfheaders` reply is a thousand filter hashes that have to be walked into a
+thousand filter headers, each one `sha256d(filterHash || previousHeader)` over
+the one before it. Done in JS that is two `createHash` allocations per block,
+and the allocations cost an order of magnitude more than the hashing does.
+
+Because every header feeds the next, the walk cannot be split into independent
+pieces the way a batch of hashes can — so `cfilterHeaderChain` takes the whole
+run and does the chaining in Rust, one crossing per chunk instead of one per
+block:
+
+```js
+import { cfilterHeaderChain, CFILTER_HEADER_LENGTH } from 'crypto-toothpick'
+
+// prevHeader is the filter header of the block before the first hash, in
+// internal (wire) byte order
+const headers = cfilterHeaderChain(prevHeader, filterHashes)
+
+// one header per hash, back to back; the last is the chain's new tip
+const tip = headers.subarray(headers.length - CFILTER_HEADER_LENGTH)
+```
+
+`filterHashes` is either a list of 32-byte hashes or one buffer with them
+already joined. The result is always one flat buffer,
+`CFILTER_HEADER_LENGTH` (32) bytes per header, in the order the hashes came in
+— returning a thousand `Uint8Array` objects would spend the batching it was
+meant to win. Slice it with `subarray`, which is a view rather than a copy.
+
+Checking a downloaded filter against that chain is `cfilterVerify`, which folds
+both digests and the comparison into the one call the filter already costs:
+
+```js
+import { cfilterVerify } from 'crypto-toothpick'
+
+if (!cfilterVerify(cfilterPayload, prevHeader, expectedHeader)) {
+  throw new Error('peer served a filter that does not match the header chain')
+}
+```
+
+Every byte string here is in internal (wire) order, like the block hashes the
+rest of the module takes. The BIP's own test vectors print filter headers
+reversed, the way explorers display them, so reverse them before comparing.
+
+| Export | Signature |
+| --- | --- |
+| `cfilterHeaderChain` | `(prev, filterHashes) => Uint8Array` |
+| `cfilterVerify` | `(filter, prev, expected) => boolean` |
+
+### What it costs
+
+Per block, on an M-series mac under Node 22, against the same work done in JS
+with `node:crypto` — the chain measured over 1000-hash chunks, the filter a
+365-byte `cfilter`:
+
+| | JS (`node:crypto`) | native | WebAssembly |
+| --- | --- | --- | --- |
+| `cfilterHeaderChain` | 0.84 µs | **0.30 µs** | **0.36 µs** |
+| `cfilterVerify` | 1.63 µs | **1.18 µs** | 21.4 µs |
+
+The chain is the one that pays: batching a thousand hashes into one call
+amortises the boundary to nothing, and it is ~2.5x faster than JS on both
+surfaces. Over a 2.3M-block restore that is about 1.2 seconds.
+
+`cfilterVerify` is called once per filter, so it pays the boundary once per
+block and only wins on the native path, by about 1.4x. **On the WebAssembly
+path it loses badly** — and not because of anything it does: every crossing
+into the wasm module costs ~7.8 µs per `Uint8Array` argument, against ~0.2 µs
+for the same argument through Node-API.
+
+| binding (byte-array arguments) | native | WebAssembly |
+| --- | --- | --- |
+| `siphash24WithKeys` (1) | 0.19 µs | 7.8 µs |
+| `FilterMatcher.matchBlock` (2) | 0.25 µs | 14.3 µs |
+| `cfilterVerify` (3) | 0.70 µs | 21.5 µs |
+
+That is the rule for the whole module, not just this pair: on WebAssembly only
+batched entry points are worth crossing for. Code that runs on the wasm
+fallback and checks filters one at a time is better off hashing them in JS —
+or collecting a chunk and checking it with `cfilterHeaderChain`, which is what
+the header walk does anyway.
+
+___
+## Difficulty (DarkGravityWave v3)
+
+Every Dash block retargets, so validating a header batch means running
+DarkGravityWave over each of its blocks: a weighted average of the previous 24
+targets, a clamped timespan, and a ratio — all in 256-bit integer arithmetic
+that JS can only do in `BigInt`.
+
+`dgwNextBitsRange` does the whole batch in one call. Headers already arrive up
+to 2000 at a time, so a full mainnet sync is ~1150 calls rather than 2.3M:
+
+```js
+import { dgwNextBitsRange, DGW_PAST_BLOCKS } from 'crypto-toothpick'
+
+// oldest first; the first DGW_PAST_BLOCKS entries are the already-validated
+// blocks before the batch, and seed the averaging window
+const expected = dgwNextBitsRange(times, nbits, DGW_PAST_BLOCKS)
+
+for (let at = 0; at < expected.length; at++) {
+  if (nbits[DGW_PAST_BLOCKS + at] !== expected[at]) {
+    throw new Error(`block ${at} carries the wrong nBits`)
+  }
+}
+```
+
+`times` and `nbits` are each header's `nTime` and `nBits`, oldest first, same
+length, as `Uint32Array`s or plain arrays. The result holds
+`times.length - contextBlocks` values, lining up with the headers from
+`contextBlocks` onward.
+
+`contextBlocks` is how many leading entries are already-validated context
+rather than blocks you want answers for. It must be at least the averaging
+window; more is fine and simply starts the answers later, without changing what
+any of them is.
+
+### Chain parameters
+
+An optional fourth argument overrides what the rule assumes about the chain:
+
+| | default | |
+| --- | --- | --- |
+| `powLimit` | `DGW_POW_LIMIT` (`0x1e0fffff`) | easiest target, as compact nBits |
+| `targetSpacing` | `DGW_TARGET_SPACING` (150) | seconds between blocks |
+| `pastBlocks` | `DGW_PAST_BLOCKS` (24) | blocks the target is averaged over |
+
+```js
+// a DGW-derived chain with a half-hour window and one-minute blocks
+dgwNextBitsRange(times, nbits, 30, { pastBlocks: 30, targetSpacing: 60 })
+```
+
+The first two differ between Dash's own networks, so anything running against
+testnet, devnet or regtest will set them. `pastBlocks` does not — the 24-block
+window is the same everywhere Dash runs — so reach for it only on a chain that
+inherited DarkGravityWave and picked a different one. Changing it changes
+consensus.
+
+Note that `pastBlocks` sets the whole window, not just the count: the target
+timespan is `pastBlocks × targetSpacing`, so a wider window expects a
+proportionally longer span.
+
+### What stays in JS
+
+Deliberately not in here, because it would be wrong to move:
+
+- **The era dispatch.** Call this only where v3 governs. KGW's event horizon is
+  `f64::powf`, and a one-ulp split between the native and WebAssembly builds
+  would move where its walk stops — which is the DGW v1/v2 failure Dash still
+  carries a permanent ±50% tolerance band for.
+- **The accept test.** Mainnet at or below height 68589 compares difficulty as
+  a float. Nothing consensus-facing crosses this boundary as a float, so the
+  comparison stays with the caller; this function only says what the nBits
+  should be.
+
+Everything that does cross is u256 integer arithmetic, so the two surfaces
+agree by construction — and the test suite checks both against the same
+`BigInt` reference rather than against each other.
+
+### What it costs
+
+Per block, over a 2000-block batch, against a tight `BigInt` implementation of
+the same rule:
+
+| | JS (`BigInt`) | native | WebAssembly |
+| --- | --- | --- | --- |
+| per block | 1.78 µs | **0.86 µs** | **1.33 µs** |
+| speedup | — | 2.1x | 1.2x |
+| over 2.3M blocks | — | ~2.1 s | ~0.6 s |
+
+The JS column is a purpose-built reference that does nothing but the
+arithmetic, so those savings are a floor: a real validator walking header
+objects and allocating `BigInt`s per block starts further behind.
+
+The shape matters more than the speed. Called once per block instead of once
+per batch, this would cost ~14 µs a block on the WebAssembly fallback — about
+30 seconds across a sync, swamping everything it saves. Batching it amortises
+the crossing to roughly 8 ns a block, which is why it wins on both surfaces
+instead of trading one against the other.
 
 ___
 ## Entry points

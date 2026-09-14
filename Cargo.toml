@@ -17,9 +17,8 @@ rs-x11-hash = { git = "https://github.com/dashpay/rs-x11-hash", tag = "0.1.9" }
 napi = { version = "=3.9.1", features = ["napi3"], default-features = false }
 napi-derive = "=3.5.6"
 hex = "0.4.3"
-# Pure-Rust SipHash-2-4; no build script, so it cross-compiles and targets wasm
-# without any of the C toolchain rs-x11-hash needs.
 siphasher = "1.0.1"
+sha2 = "0.10.9"
 
 [build-dependencies]
 # Pinned: 2.4.x links the wasm build against emnapi v2's
